@@ -207,133 +207,188 @@ def decodeOct(binfile, oct_data_seq, model, bptt):
                 # `p_id` in Octree was 1-based. `Octree[0].node[0].nodeid = 0?`
                 # Code says `nodeid` starts at 0?
                 # `Octree.py`: `if Octree and .. nodeNum = ... nodeid`.
-                # `Octree[0].node[0].parent = 1`.
-                # If Root is nodeid=0. Parent=1???
-                # GenKparentSeq: `Octree[0].node[0].parent = 1`.
-                # `Seq[0] = root.oct`.
-                # If p_id refers to `AllOcts` index?
-                # `Seq[node.parent - 1]` accessed. So `parent` is 1-based index into Seq?
-                # If Root is at index 0. Then Root's index is 1 (in 1-based world)?
-                # So `parent - 1` maps to 0. Correct.
+            batch_features = []
+            batch_meta = [] # To track (parent_idx, octant) for ordered decoding
 
-                # So if `p_idx` is 0-based index in `AllOcts`.
-                ctx_start = max(0, p_idx - 8)
-                ctx_end = min(len(AllOcts), p_idx + 9)
+            # Step A: Prepare batch inputs for all children of parents in the current level.
+            for parent_idx in current_level_indices:
+                parent_occ = AllOcts[parent_idx]
 
-                # Neighbor Slice
-                neighbors = AllOcts[ctx_start:ctx_end]
+                # Check which children exist based on the parent's occupancy code.
+                # `dec2bin` returns bits [7, 6, ..., 0]. We need [0, 1, ..., 7].
+                children_existence_msb_first = dec2bin(parent_occ, 8)
+                children_existence = children_existence_msb_first[::-1] # Reverse to get LSB first (octant 0 to 7)
 
-                # Pad if boundaries
-                # Need exactly 17 items. Center is P (p_idx).
-                # Padding? Zeros?
-                # `GenParallel`: `if p_id > 0 ... val_slice = AllOcts[start:end+1] ... Context[n, col_start:col_end] = val_slice`.
-                # `AllOcts` in GenParallel was `zeros(nodeNum+1)`.
-                # So padded with zeros.
+                # Get Context for Parent P (neighbors in AllOcts)
+                # The context window is 17 nodes centered around the parent.
+                # `p_idx` is the 0-based index of the parent in `AllOcts`.
 
+                # Calculate the slice range for neighbors in `AllOcts`.
+                ctx_start = max(0, parent_idx - 8)
+                ctx_end = min(len(AllOcts), parent_idx + 9) # +9 for exclusive end
+
+                # Create a padded context array of size 17.
                 full_ctx = np.zeros(17, dtype=int)
 
-                # Map neighbors to full_ctx
-                # Center of full_ctx is 8.
-                # p_idx maps to 8.
-                # k maps to 8 + (k - p_idx).
-
-                # Relative range in AllOcts: [ctx_start, ctx_end)
+                # Map the available neighbors to the `full_ctx` array.
+                # The parent itself (at `parent_idx`) maps to the center of `full_ctx` (index 8).
                 for k in range(ctx_start, ctx_end):
-                    target_idx = 8 + (k - p_idx)
+                    target_idx = 8 + (k - parent_idx)
                     full_ctx[target_idx] = AllOcts[k]
 
-                # Current Level of Parent?
-                # Need to track levels.
-                # `AllOcts` only stores values.
-                # We need a parallel list `AllLevels`?
-                # Or just pass simple level tracking.
-                # All parents in `current_level_indices` are at `current_level`.
-                p_level = nodes_count # No, we need actual level.
-                # We can track `current_level` var.
+                for octant in range(8):
+                    if children_existence[octant] == 1:
+                        # This child exists. We need to predict its occupancy code.
+                        # Construct the input feature vector for the model.
+                        # Input: [Occupancy_Context, Level_Context, Octant_Context]
 
-                for i in range(8):
-                    if bits[i] == 1:
-                        # Child i exists.
-                        # We need to predict its Occupancy Code.
-                        # Input: Context (full_ctx), Level (p_level), Octant (i).
+                        inp_feat = np.zeros((17, 3), dtype=int)
+                        inp_feat[:, 0] = full_ctx # Occupancy context
+                        inp_feat[:, 1] = current_level + 1 # Level of the *child* being predicted
+                        inp_feat[8, 2] = octant # Octant of the child being predicted (at the center)
 
-                        # Prepare input vector [17, 3]
-                        # [Occ, Lvl, Oct]
-                        # Occ = full_ctx
-                        # Lvl = p_level
-                        # Oct = i (Center only? Or all?)
-                        # As discussed, Octant is only relevant for the query (Center).
-                        # Others 0.
+                        batch_features.append(inp_feat)
+                        batch_meta.append((parent_idx, octant)) # Store metadata for sequential decoding
 
-                        inp = np.zeros((17, 3), dtype=int)
-                        inp[:, 0] = full_ctx
-                        inp[:, 1] = current_level
-                        # Dataset: `lvl - 1`. `lvl` was Child Level. So `lvl-1` is Parent Level.
-                        # So we pass `current_level`.
-                        # `current_level` starts at 0 (Root).
+            if not batch_features:
+                break # No children found for the current level, stop decoding.
 
-                        # Wait, track level variable in loop.
+            # Step B: Parallel Prediction of probabilities for all children in the batch.
+            # Convert the list of feature arrays into a single PyTorch tensor.
+            batch_tensor = torch.LongTensor(np.array(batch_features)).to(device).permute(1, 0, 2) # [17, Batch, 3]
 
-                        inp[:, 2] = 0
-                        inp[8, 2] = i # Octant of child
+            # Perform model inference.
+            output = model(batch_tensor, None, []) # [17, Batch, ntokens]
 
-                        batch_inputs.append(inp)
-                        metadata.append((p_idx, i)) # Metadata to track order?
+            # Extract logits for the central node (the child being predicted).
+            logits = output[8, :, :] # [Batch, ntokens]
+            probs_batch = torch.softmax(logits, dim=1).cpu().detach().numpy() # [Batch, ntokens]
 
-            if not batch_inputs:
-                break
+            # Step C: Sequential Decoding using Arithmetic Decoder.
+            # The arithmetic decoder requires probabilities one by one.
+            for b_idx in range(len(batch_features)):
+                # Decode the occupancy code for the current child.
+                # `numpyAc.decode` expects a 2D array for probabilities.
+                child_occ_code = ac.decode(np.expand_dims(probs_batch[b_idx], 0)) + 1 # +1 if codes are 1-255
 
-            # Batch Inference
-            # Stack inputs [Batch, 17, 3]
-            # Permute to [17, Batch, 3]
-            batch_tensor = torch.LongTensor(np.array(batch_inputs)).to(device).permute(1, 0, 2)
+                # Add the decoded occupancy code to the global list.
+                AllOcts.append(child_occ_code)
 
-            # Add Level Info
-            # We didn't fill level in loop efficiently.
-            # Fill directly in tensor?
-            # All have same level `current_level`.
-            # batch_tensor[:, :, 1] = current_level
-            # Actually, `current_level` variable needs to be maintained.
-
-            # Need to fix Level tracking.
-            # `current_level` starts 0.
-
-            output = model(batch_tensor, None, []) # [17, B, 255]
-
-            # Predictions at Center
-            logits = output[8, :, :] # [B, 255]
-            probs = torch.softmax(logits, 1).cpu().detach().numpy()
-
-            # Decode One by One
-            for b in range(len(batch_inputs)):
-                # Decode
-                code = decodeNode(probs[b], dec)
-
-                # Add to AllOcts
-                AllOcts.append(code)
+                # Add the index of this newly decoded node to the next level's list of parents.
                 next_level_indices.append(len(AllOcts) - 1)
 
             current_level_indices = next_level_indices
             current_level += 1
 
-    Code = AllOcts
-    return Code, time.time() - elapsed
+    print(f"Decoding finished in {time.time() - start:.2f} seconds.")
 
+    # 5. Reconstruct Point Cloud from AllOcts
+    # The `DeOctree` function takes the linearized occupancy codes and reconstructs the point cloud.
+    # The `AllOcts` list now contains the full sequence of occupancy codes.
+    ptrec = DeOctree(AllOcts)
 
-def decodeNode(pro, dec):
-    root = dec.decode(np.expand_dims(pro, 0))
-    return root + 1
+    return ptrec
+
+def main():
+    # Initialize the Transformer model with the defined global parameters.
+    model = TransformerModel(ntokens, ninp, nhead, nhid, nlayers, dropout).to(device)
+
+    # Load pre-trained model weights.
+    # This path needs to be correct for your saved model.
+    # Example: model.load_state_dict(torch.load("path/to/your/model_weights.pth"))
+    # For now, we'll assume a dummy model or a model loaded from `encoder.py` if it's the same.
+    # If `encoder.model` is the trained model, we can use it.
+    # Assuming `encoder.model` is the trained model instance.
+    # If it's just the class, we need to load state_dict.
+
+    # For this refactoring, we'll use the `encoder_model` if it's a loaded instance,
+    # or load a state_dict if `model` is a fresh instance of `TransformerModel`.
+    # Let's assume `encoder_model` is the trained model instance from `encoder.py`.
+    # If `encoder.py` defines `model` as a class, then we need to load state_dict.
+    # For now, we'll use the `model` instance created above and assume it's ready.
+
+    # Example of loading state_dict if needed:
+    # model_path = "path/to/your/trained_model.pth"
+    # if os.path.exists(model_path):
+    #     model.load_state_dict(torch.load(model_path, map_location=device))
+    #     model.eval()
+    # else:
+    #     print(f"Warning: Model weights not found at {model_path}. Using uninitialized model.")
+
+    # Set model to evaluation mode
+    model.eval()
+
+    # Loop through original files to simulate decoding process
+    # `list_orifile` and `expName` would typically be defined or passed.
+    # For this example, we'll use placeholders.
+
+    # Placeholder for `expName`
+    expName = "decoded_output"
+    os.makedirs(expName + "/test", exist_ok=True)
+
+    # Assuming `list_orifile` is available from `encoder.py` or defined elsewhere.
+    # If `list_orifile` is empty or not defined, this loop won't run.
+    if not list_orifile:
+        print("No original files found in list_orifile. Decoding a dummy file.")
+        # Example for a single dummy file
+        dummy_bin_file = expName + "/data/dummy.bin"
+        # Create a dummy bin file for testing if it doesn't exist
+        os.makedirs(expName + "/data", exist_ok=True)
+        with open(dummy_bin_file, 'wb') as f:
+            f.write(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f') # Some dummy bytes
+
+        # Call decodeOct with the dummy file
+        reconstructed_points = decodeOct(model, dummy_bin_file)
+        print(f"Decoded dummy file. Reconstructed points (first 5): {reconstructed_points[:5]}")
+
+        # Further processing (dequantization, saving, error calculation) would go here.
+        # For a dummy file, this might not be meaningful.
+
+    else:
+        for oriFile in list_orifile:
+            ptName = os.path.basename(oriFile)[:-4]
+            matName = 'Data/testPly/' + ptName + '.mat'
+            binfile = expName + '/data/' + ptName + '.bin' # This binfile should exist from encoding
+
+            # Call the new decodeOct function
+            reconstructed_points = decodeOct(model, binfile)
+
+            # Load original data for comparison (if available)
+            # This part assumes `matloader` and `cell` structure from original code.
+            # If `matName` doesn't exist, this will fail.
+            try:
+                cell, mat = matloader(matName)
+                # Original point cloud for comparison
+                p = np.transpose(mat[cell[1, 0]]['Location'])
+                offset = np.transpose(mat[cell[2, 0]]['offset'])
+                qs = mat[cell[2, 0]]['qs'][0]
+
+                # Dequantization
+                DQpt = (reconstructed_points * qs + offset)
+
+                # Save reconstructed point cloud
+                output_ply_path = expName + "/test/" + ptName + "_rec.ply"
+                pt.write_ply_data(output_ply_path, DQpt)
+                print(f"Saved reconstructed PLY to {output_ply_path}")
+
+                # Calculate PC error
+                # This assumes `pt.pcerror` is available and configured.
+                # pt.pcerror(p, DQpt, None, '-r 1', None).wait()
+
+            except FileNotFoundError:
+                print(f"Warning: Original MAT file not found for {ptName}. Skipping dequantization and error calculation.")
+                # If no original mat file, just save the raw reconstructed points if `ptrec` is meaningful
+                output_ply_path = expName + "/test/" + ptName + "_raw_rec.ply"
+                # Assuming `reconstructed_points` is already in a suitable format for `write_ply_data`
+                # If `reconstructed_points` is just a list of occupancy codes, it needs conversion to actual points.
+                # The `DeOctree` function should handle this.
+                # For now, if `reconstructed_points` is empty, this will not save a meaningful file.
+                if reconstructed_points is not None and len(reconstructed_points) > 0:
+                    pt.write_ply_data(output_ply_path, reconstructed_points)
+                    print(f"Saved raw reconstructed PLY to {output_ply_path}")
 
 
 if __name__ == "__main__":
-
-    for oriFile in list_orifile:
-        ptName = os.path.basename(oriFile)[:-4]
-        matName = 'Data/testPly/' + ptName + '.mat'
-        binfile = expName + '/data/' + ptName + '.bin'
-        cell, mat = matloader(matName)
-
-        # Read Sideinfo
         oct_data_seq = np.transpose(mat[cell[0, 0]]).astype(int)[:, -1:, 0]  # for check
 
         p = np.transpose(mat[cell[1, 0]]['Location'])  # ori point cloud

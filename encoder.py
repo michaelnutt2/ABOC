@@ -23,6 +23,9 @@ model.load_state_dict(saveDic['encoder'])
 # ##########LiDar##############
 GPCC_MULTIPLE = 2 ** 20
 list_orifile = ['file/Ply/11_000000.bin']
+
+import numpy as np
+
 if __name__ == "__main__":
     printl = CPrintl(expName + '/encoderPLY.txt')
     printl('_' * 50, 'OctAttention V0.4', '_' * 50)
@@ -36,8 +39,6 @@ if __name__ == "__main__":
                                                 qs=2 / (2 ** 12 - 1), rotation=False, normalize=True)
 
         # Load FlatBuffer and Prepare Data
-        # We can use dataset.DataFolder logic or direct load here.
-        # Direct load using generated classes is best for transparency.
         try:
             import OctreeData.Dataset as Dataset
             # import OctreeData.OctreeNode as OctreeNode # Not needed here maybe
@@ -72,21 +73,11 @@ if __name__ == "__main__":
 
                 features[i, :, 0] = full_ctx
                 features[i, :, 1] = lvl - 1
-                features[i, :, 2] = octant # Wait, encoderTool previously unused octant?
-                # Model needs Octant in Channel 2.
-                # In dataset.py we put 0. Here we put octant.
-                # Actually, in 'dataset.py' update I put: extracted_data[i, 8, 2] = node.Octant()
-                # and zeros elsewhere.
-                # The Transformer takes [17, N, 3].
-                # It uses index 2 (Octant) via 'encoder2'.
-                # If we only set center octant, others are 0 (Padding).
-                # Is that what we want?
-                # "Query (Parent + Child Index)". Yes, only the center matters for the Query.
+                features[i, :, 2] = octant
                 # The context neighbors are "Result of previous decodes", their 'Child Index' is irrelevant to the current prediction?
                 # Actually, neighbors are just "Context". They don't have a "Child Index" relative to *Current* parent.
                 # So setting their octant to 0 is fine.
 
-                features[i, 8, 2] = octant
                 targets[i] = occ
 
             data_packet = {

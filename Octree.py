@@ -1,7 +1,9 @@
 """
 Author: fuchy@stu.pku.edu.cn
-Description: Octree
+Description: Octree data structure and helper functions for generation/decoding.
 FilePath: /compression/Octree.py
+LastEditTime: 2025-12-11
+LastEditors: Antigravity
 All rights reserved.
 """
 import numpy as np
@@ -9,6 +11,7 @@ from OctreeCPP.Octreewarpper import GenOctree
 
 
 class CNode:
+    """Class representing a single node in the Octree."""
     def __init__(self, nodeid=0, childPoint=[[]] * 8, parent=0, oct=0, pos=np.array([0, 0, 0]), octant=0) -> None:
         self.nodeid = nodeid
         self.childPoint = childPoint.copy()
@@ -19,6 +22,7 @@ class CNode:
 
 
 class COctree:
+    """Class representing the Octree structure."""
     def __init__(self, node=[], level=0) -> None:
         self.node = node.copy()
         self.level = level
@@ -30,11 +34,13 @@ def dec2bin(n, count=8):
 
 
 def dec2binAry(x, bits):
+    """Converts array of integers to binary representation."""
     mask = np.expand_dims(2 ** np.arange(bits - 1, -1, -1), 1).T
     return (np.bitwise_and(np.expand_dims(x, 1), mask) != 0).astype(int)
 
 
 def bin2decAry(x):
+    """Converts binary array back to integers."""
     if x.ndim == 1:
         x = np.expand_dims(x, 0)
     bits = x.shape[1]
@@ -43,6 +49,7 @@ def bin2decAry(x):
 
 
 def Morton(A):
+    """Generates Morton codes for a set of points A."""
     A = A.astype(int)
     n = np.ceil(np.log2(np.max(A) + 1)).astype(int)
     x = dec2binAry(A[:, 0], n)
@@ -55,6 +62,7 @@ def Morton(A):
 
 
 def DeOctree(Codes):
+    """Reconstructs points from Octree Codes."""
     Codes = np.squeeze(Codes)
     occupancyCode = np.flip(dec2binAry(Codes, 8), axis=1)
     codeL = occupancyCode.shape[0]
@@ -87,6 +95,7 @@ def DeOctree(Codes):
 
 
 def GenKparentSeq(Octree, K):
+    """Generates K-parent sequence context (Legacy)."""
     LevelNum = len(Octree)
     nodeNum = Octree[-1].node[-1].nodeid
     Seq = np.ones((nodeNum, K), 'int') * 255
@@ -116,14 +125,23 @@ def GenKparentSeq(Octree, K):
 
 
 def GenParallelContext(Octree, context_range=8):
+    """
+    Generates Parallel Context for each node based on its Parent and Parent's Neighbors.
+
+    Args:
+        Octree: List of COctree objects (levels).
+        context_range: Number of neighbors to include on each side of the parent (default 8).
+
+    Returns:
+        Context: Array of shape (nodeNum, 2*context_range+1) containing occupancy codes of the parent's neighborhood.
+        AllOcts: Array containing occupancy codes of all nodes in sequence order.
+    """
     # Find max nodeid to size arrays
     nodeNum = 0
     if Octree and Octree[-1].node:
         nodeNum = Octree[-1].node[-1].nodeid
 
-    # Flatten oct codes for easy access
-    # Using nodeid as index. Note: nodeid is likely 1-based (root=1).
-    # We allocate nodeNum + 1.
+    # Flatten oct codes for easy access using nodeid as index (1-based to match legacy).
     AllOcts = np.zeros(nodeNum + 1, dtype=int)
 
     # Fill AllOcts
@@ -134,39 +152,24 @@ def GenParallelContext(Octree, context_range=8):
 
     # Output context array
     # Shape: (nodeNum, 2 * context_range + 1)
-    # Format: [Parent, P-1, P-2, ... P-8, P+1, ... P+8] -> actually let's sort strictly:
-    # [P-range, ..., P, ..., P+range] so convolution is natural.
     width = 2 * context_range + 1
     Context = np.zeros((nodeNum, width), dtype=int)
 
     # Iterate to fill context
-    # Note: GenKparentSeq iterates n=0..nodeNum-1 matching the sequence.
-    # We should match the order of nodes in the output sequence.
-    # GenKparentSeq iterates levels then nodes.
-
     n = 0
     for L in range(len(Octree)):
         for node in Octree[L].node:
-            # Current node corresponds to row n in the dataset
-            # We need context for this node.
-            # Context is based on Parent's neighbors.
+            # Current node corresponds to row n in the dataset.
+            # Context is based on Parent's neighbors in the linearized sequence.
 
             p_id = node.parent
 
-            # Root (L=0) handling: parent is 1 (itself) in GenKparentSeq.
-            # Neighbors of root? None.
-
             if p_id > 0 and p_id <= nodeNum:
                 # Get window around parent
-
-                # Determine range [start, end] inclusive
                 start = max(1, p_id - context_range)
                 end = min(nodeNum, p_id + context_range)
 
-                # We need to map [start, end] into the Context row [0, width]
-                # The center of Context row is 'context_range', which should hold AllOcts[p_id].
-                # A value at global index 'k' should go to Context column: context_range + (k - p_id)
-
+                # Map neighbor slice to Context row
                 val_slice = AllOcts[start : end+1]
 
                 col_start = context_range + (start - p_id)

@@ -130,67 +130,75 @@ class TransformerLayer(nn.Module):
     4. Final Add & Norm layer
 
     Args:
-        ninp (int): The input feature dimensionality
-        nhead (int): Number of attention heads
-        nhid (int): The dimensionality of the hidden layer in feed-forward network
-        dropout (float, optional): Dropout probability. Defaults to 0.1.
+        d_model (int): The number of expected features in the input.
+        nhead (int): The number of heads in the multiheadattention models.
+        dim_feedforward (int): The dimension of the feedforward network model.
+        dropout (float): The dropout value.
 
     Attributes:
-        MultiAttention: Self multi-head attention layer
+        self_attn: Self multi-head attention layer
         linear1: First linear transformation of feed-forward network
         linear2: Second linear transformation of feed-forward network
         dropout: Dropout layer for feed-forward network
         norm1: Layer normalization after attention
         norm2: Layer normalization after feed-forward
-        dropout1: Dropout for attention output
-        dropout2: Dropout for feed-forward output
-
-    Methods:
-        forward(src, src_mask):
-            Args:
-                src (Tensor): Input tensor of shape [batch_size, seq_len, ninp]
-                src_mask (Tensor): Attention mask tensor
-
-            Returns:
-                Tensor: Output tensor of shape [batch_size, seq_len, ninp]
     """
-
-    def __init__(self, ninp, nhead, nhid, dropout=0.1):
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
         super(TransformerLayer, self).__init__()
-        self.MultiAttention = SelfMultiheadAttention(emsize=ninp, nhead=nhead)
-        self.linear1 = nn.Linear(ninp, nhid)
-        self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(nhid, ninp)
+        self.self_attn = SelfMultiheadAttention(d_model, nhead, dropout=dropout)
 
-        self.norm1 = nn.LayerNorm(ninp, eps=1e-5)  # It will affect parallel coding
-        self.norm2 = nn.LayerNorm(ninp, eps=1e-5)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
+        self.activation = nn.ReLU()
 
-    # src is the integration of leaf node and its ancestors.
-    def forward(self, src, src_mask):
-        src2 = self.MultiAttention(src, src_mask)  # Multi-head Attention
-        src = self.dropout1(src2) + src
+    def forward(self, src, src_mask=None, src_key_padding_mask=None):
+        """
+        Pass the input through the encoder layer.
+
+        Args:
+            src: input sequence.
+            src_mask: attention mask.
+            src_key_padding_mask: mask for padding keys.
+        """
+        src2 = self.self_attn(src, src, src, attn_mask=src_mask,
+                              key_padding_mask=src_key_padding_mask)[0]
+        src = src + self.dropout1(src2)
         src = self.norm1(src)
-        src2 = self.linear2(self.dropout(
-            torch.relu(
-                self.linear1(src))))  # [batch_size,bptt,ninp] -> [batch_size,bptt,nhid] -> [batch_size,bptt,ninp]
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
         src = src + self.dropout2(src2)
         src = self.norm2(src)
         return src
 
 
 class TransformerModule(nn.Module):
+    """
+    TransformerEncoder is a stack of N encoder layers.
 
-    def __init__(self, layer, nlayers):
+    Args:
+        encoder_layer: an instance of the TransformerLayer() class (required).
+        num_layers: the number of sub-encoder-layers in the encoder (required).
+        norm: the layer normalization component (optional).
+    """
+    def __init__(self, encoder_layer, num_layers, norm=None):
         super(TransformerModule, self).__init__()
-        self.layers = torch.nn.ModuleList([copy.deepcopy(layer) for i in range(nlayers)])
+        self.layers = nn.ModuleList([encoder_layer for _ in range(num_layers)])
+        self.num_layers = num_layers
+        self.norm = norm
 
-    def forward(self, src, src_mask):
+    def forward(self, src, mask=None, src_key_padding_mask=None):
         output = src
-
         for mod in self.layers:
-            output = mod(output, src_mask=src_mask)
+            output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+
+        if self.norm is not None:
+            output = self.norm(output)
+
         return output
 
 # class SiblingAttention(nn.Module):
