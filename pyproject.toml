@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "octattention"
+version = "0.1.0"
+description = ""
+authors = ["Michael Nutt <michaelnutt2@my.unt.edu>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = {version = "^2.3.0+cpu", source = "pytorch_cpu"}
+numpy = "^1.26.4"
+hdf5storage = "^0.1.19"
+ninja = "^1.11.1.4"
+tensorboard = "^2.19.0"
+tqdm = "^4.67.1"
+matplotlib = "^3.10.1"
+h5py = "^3.13.0"
+plyfile = "^1.1"
+scipy = "^1.15.2"
+
+
+[[tool.poetry.source]]
+name = "pytorch_cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+

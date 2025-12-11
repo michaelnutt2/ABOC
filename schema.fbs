@@ -1,0 +1,26 @@
+namespace OctreeData;
+
+table OctreeNode {
+  pos_x: int;
+  pos_y: int;
+  pos_z: int;
+  level: int;
+  octant: int;
+  occupancy: int;
+  parent_id: int;
+  // Context: Parent's info + Neighbors
+  parent_occupancy: int;
+  neighbor_occupancies: [int]; // Occupancies of +/- 8 siblings
+}
+
+table Dataset {
+  nodes: [OctreeNode];
+  qs: float;
+  offset_x: float;
+  offset_y: float;
+  offset_z: float;
+  lmax: int;
+  name: string;
+}
+
+root_type Dataset;
