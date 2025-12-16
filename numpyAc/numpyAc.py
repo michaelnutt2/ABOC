@@ -142,7 +142,7 @@ class arithmeticDeCoding():
     """
     Decoding class
     byte_stream: the bin file stream.
-    sysNum: the Number of symbols that you are going to decode. This value should be 
+    sysNum: the Number of symbols that you are going to decode. This value should be
             saved in other ways.
     sysDim: the Number of the possible symbols.
     binfile: bin file path, if it is Not None, 'byte_stream' will read from this file
@@ -161,4 +161,17 @@ class arithmeticDeCoding():
         pro = _convert_to_int_and_normalize(cdfF, needs_normalization=True)
         pro = pro.squeeze(0).astype(np.uint16).tolist()
         sym_out = self.decoder.decodeAsym(pro)
+        return sym_out
+
+    def decode_batch(self, pdf_batch):
+        # pdf_batch: [Batch, 256]
+        # Convert to CDF and normalize
+        cdfF = pdf_convert_to_cdf_and_normalize(pdf_batch)
+        pro = _convert_to_int_and_normalize(cdfF, needs_normalization=True)
+        # pro is int16 [Batch, 257]
+
+        # Call Backend Batch Decode
+        # Ensure it is a Tensor on CPU
+        pro_tensor = torch.ShortTensor(pro.astype(np.int16))
+        sym_out = self.decoder.decodeCDFBatch(pro_tensor)
         return sym_out

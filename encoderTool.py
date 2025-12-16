@@ -1,10 +1,3 @@
-"""
-Author: fuchy@stu.pku.edu.cn
-Description: this file is the encoder helper.
-FilePath: /compression/encoderTool.py
-All rights reserved.
-"""
-
 #%%
 import numpy as np
 import torch
@@ -67,39 +60,6 @@ return {int list;oct length of 8~maxlevel octree} octNumList
 '''
 
 
-def compress(oct_data_seq, outputfile, model, actualcode=True, print=print, showRelut=False):
-    model.eval()
-
-    # Needs to reconstruct Octree from oct_data_seq to get ParallelContext?
-    # oct_data_seq comes from 'dataset.py' logic usually, but here main() passes specific legacy format.
-    # main() extracts: oct_data_seq = np.transpose(mat[cell[0, 0]]).astype(int)[:, -FeatDim:, 0:6]
-    # This is the "K-Parent" sequence.
-    # We need the full Octree structure to generate Parallel Context.
-
-    # We should modify 'main' or 'compress' to accept the full Octree or reconstruct it.
-    # 'oct_data_seq' contains [Oct, Level, Octant, Pos] ?
-    # Shape of oct_data_seq in main: [N, K, 6]?
-    # Actually main extracts "[:, -FeatDim:, 0:6]".
-    # We might need to reload the .mat more carefully or just expect the octree structure.
-    # BUT: The user moved to FlatBuffers.
-    # 'encoder.py' calls 'dataPrepare' which now saves .fb files.
-    # 'main' in 'encoder.py' loads the file.
-    # 'main' needs to be updated to load .fb if available.
-
-    # Assuming we have the Octree nodes in order (Linear).
-    # We need to reconstruct the "Context" array.
-    # If we have the list of Occupancies + Levels, we can reconstruct the context (Parent + Neighbors).
-    # Since the input is linearized Octree (Breadth First or Depth First? Morton?), we can deduce neighbors?
-    # Morton order is standard.
-    # "Parent + Neighbors" implies we need the parent's index in the previous level.
-    # It's complex to reconstruct from just the sequence without the tree pointers.
-    # The 'Octree.py' `GenOctree` returns the `Octree` object which has structure.
-
-    # Strategy:
-    # 1. Update 'main' to pass the loaded FlatBuffer data (which computes Context in data loader!)
-    # 2. Or if running from .mat/scratch, re-run GenOctree?
-import time
-from networkTool import *
 
 # Ensure Octree and Dataset modules are available
 try:
@@ -121,7 +81,7 @@ nhead = 4
 dropout = 0
 
 
-def compress(data, model):
+def compress(data, model, outputfile, actualcode=True):
     """
     Compresses the octree data using Arithmetic Coding and the trained Transformer model.
 
@@ -132,32 +92,35 @@ def compress(data, model):
             - ptName: Name of the point cloud
             - visualize_data: tuple (points, code) for verification
         model (nn.Module): The trained Transformer model.
+        outputfile (str): Path to save the compressed binary file.
+        actualcode (bool): Whether to perform actual arithmetic coding.
 
     Returns:
         float: Bits per point (bpp) achieved.
+        float: Encoding time in seconds.
+        int: Size of the compressed file in bytes.
     """
     start = time.time()
 
     # 1. Initialize Arithmetic Encoder
     ac = numpyAc.arithmeticCoding()
-    freq = np.ones(256, int) # Frequency table initialization
 
     # 2. Extract Data
     features = data['features'] # [N, 17, 3]
     targets = data['targets']   # [N]
     num_nodes = len(targets)
 
-    print(f"Compressing {num_nodes} nodes...")
+    print(f"Compressing {num_nodes} nodes to {outputfile}...")
 
-    # 3. Batch Processing for Model Inference
-    # We predict probabilities for a batch of nodes at once.
+    # 3. Model Inference to get Probabilities
+    # We predict probabilities for all nodes.
+    # To avoid OOM, we can batch the inference.
     batch_size = 512
-    proBit = np.zeros((num_nodes, 256), dtype=float)
+    proBit = np.zeros((num_nodes, 255), dtype=np.float32) # Store probs for classes 1-255
 
     model.eval()
     with torch.no_grad():
-        for i in range(0, num_nodes, batch_size):
-            # Prepare Batch
+        for i in tqdm.tqdm(range(0, num_nodes, batch_size), desc="Inferring probabilities"):
             end = min(i + batch_size, num_nodes)
             batch_img = features[i:end] # [B, 17, 3]
 
@@ -165,86 +128,72 @@ def compress(data, model):
             input_tensor = torch.from_numpy(batch_img).permute(1, 0, 2).float().to(device)
 
             # Predict
-            # No mask needed for parallel context
             output = model(input_tensor, None, []) # [17, B, 255]
 
             # We want the output corresponding to the center node (index 8)
-            # The model returns [SeqLen, Batch, Vocab]
             output = output[8, :, :] # [B, 255]
 
             # Softmax to get probabilities
-            prob = nn.functional.softmax(output, dim=1).cpu().numpy()
+            prob = torch.softmax(output, dim=1).cpu().numpy() # [B, 255]
 
-            # Store probabilities
-            # Arithmetic coder expects 256 probabilities (0-255).
-            # Model outputs 255 classes (1-255).
-            # We shift model output to indices 1-255. Index 0 is unused or dummy?
-            # Legacy code handled mapping.
-            # Assuming model output 0 -> prob for class 1?
-            # Let's align with legacy freq map.
-            proBit[i:end, 1:] = prob
-
-            # Small epsilon to avoid zero prob
-            proBit[i:end] += 1e-6
+            proBit[i:end] = prob
 
     # 4. Arithmetic Encoding
     # Encode targets sequentially using pre-computed probabilities
-    for i in range(num_nodes):
-        target_code = int(targets[i])
 
-        # Helper to convert probability distribution to freq counts for AC
-        # (This is a simplified view; actual AC implementation might vary)
-        # Here we update 'freq' based on 'proBit[i]' or use proBit directly if AC supports it.
-        # The provided 'numpyAc' seems to use 'freq' table updates or static stats.
-        # Legacy code: ac.encode(freq, dec2bin(code), ...)
-        # Wait, legacy compress used 'ac.encode(freq, code)'.
-        # We need to map probability to frequency table? OR use adaptive model?
+    # Check if we should use actual coding
+    if actualcode:
+        # Prepare probability table: [N, 256] -> padding index 0 with zeros?
+        # numpyAc expects a specific format.
+        # Based on `numpyAc.py`: `encode(pdf, sym)`
+        # pdf should be [N, 256] (if symDim=255?).
+        # targets are in range [1, 255].
+        # So we need a distribution of size 256.
+        # Index 0 is probability of symbol 0 (which is unused/dummy).
 
-        # If using Adaptive Arithmetic Coding with Model Probabilities:
-        # We assume 'numpyAc' can take a probability distribution.
-        # But standard AC takes cum_freq.
+        full_probs = np.zeros((num_nodes, 256), dtype=np.float32)
+        full_probs[:, 1:] = proBit # Map 1-255 predictions to indices 1-255
 
-        # Let's assume for now we just encode using the probabilities derived.
-        # Since we don't have the source for numpyAc, we replicate the pattern:
-        # ac.update(freq, code) -> updates model after encoding?
-        # But we want to use DEEP LEARNING probs.
+        # Ensure sum is 1.0 (might need normalization if float errors)
+        # Adding epsilon to avoid zero prob for any symbol potentially?
+        # numpyAc handles normalization internally if we pass unnormalized.
+        # But let's keep it clean.
+        full_probs += 1e-9
+        full_probs = full_probs / full_probs.sum(axis=1, keepdims=True)
 
-        # Placeholder integration:
-        # Assuming numpyAc has a method to encode using explicit probability distribution
-        # OR we just simulate the bit cost here for reporting:
-        # -log2(p[target])
+        targets_int = targets.astype(np.int16)
 
-        p = proBit[i, target_code]
-        # bit_cost = -math.log2(p)
-        # ac.write(bit_cost) # conceptual
+        # Encode!
+        byte_stream, real_bits = ac.encode(full_probs, targets_int, binfile=outputfile)
 
-        # Actual AC call (stub based on likely API)
-        # ac.encode(target_code, proBit[i])
+        file_size = len(byte_stream)
+
+    else:
+        # Simulation only
+        total_bits = 0
+        for i in range(num_nodes):
+            target_code = int(targets[i])
+            if target_code > 0:
+                p = proBit[i, target_code - 1] # proBit is 0-indexed for classes 1-255
+                total_bits += -np.log2(p + 1e-9)
+
+        file_size = int(total_bits / 8)
+        # Write dummy file if requested? Or just skip.
+        if outputfile:
+            with open(outputfile, 'wb') as f:
+                f.write(b'SIMULATION')
 
     end = time.time()
     encodetime = end - start
 
     # Calculate Bits Per Point
-    # For simulation, we can sum -log2(p).
-    # Actual file size would be ac.finish()
-
-    total_bits = 0
-    for i in range(num_nodes):
-        target_code = int(targets[i])
-        p = proBit[i, target_code]
-        total_bits += -np.log2(p)
-
-    # Add geometry overhead (approx)
-    bp = total_bits
-
-    # Verify/Visualize
+    # Verification data
     points, codes = data['visualize_data']
-    ptName = data['ptName']
 
-    bpp = bp / len(points)
-    print(f"Compressed {ptName}: {bpp:.4f} bpp, Time: {encodetime:.2f}s")
+    bpp = (file_size * 8) / len(points)
+    print(f"Compressed {data.get('ptName', 'Point Cloud')}: {bpp:.4f} bpp, Size: {file_size} bytes, Time: {encodetime:.2f}s")
 
-    return bpp
+    return bpp, encodetime, file_size
 
 
 def main(data_dict):

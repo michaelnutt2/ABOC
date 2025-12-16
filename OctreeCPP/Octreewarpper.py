@@ -1,8 +1,4 @@
-'''
-Author: fuchy@stu.pku.edu.cn
-LastEditors: Please set LastEditors
-Description: 
-'''
+
 from ctypes import *
 import numpy as np
 import os

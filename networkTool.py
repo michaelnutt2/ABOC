@@ -1,10 +1,3 @@
-"""
-Author: fuchy@stu.pku.edu.cn
-LastEditors: FCY
-Description: Network parameters and helper functions
-FilePath: /compression/networkTool.py
-"""
-
 import torch
 import os
 import random
@@ -22,7 +15,7 @@ DataRoot = './Data/Lidar'
 checkpointPath = expName + '/checkpoint'
 levelNumK = 4
 
-trainDataRoot = DataRoot + "/train/*.mat"  # DON'T FORGET RUN ImageFolder.calcdataLenPerFile() FIRST
+trainDataRoot = DataRoot + "/train/"  # DON'T FORGET RUN ImageFolder.calcdataLenPerFile() FIRST
 expComment = 'OctAttention, trained on SemanticKITTI 1~12 level. 2021/12. All rights reserved.'
 
 MAX_OCTREE_LEVEL = 12

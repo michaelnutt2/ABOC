@@ -1,11 +1,3 @@
-"""
-Author: fuchy@stu.pku.edu.cn
-Description: Octree data structure and helper functions for generation/decoding.
-FilePath: /compression/Octree.py
-LastEditTime: 2025-12-11
-LastEditors: Antigravity
-All rights reserved.
-"""
 import numpy as np
 from OctreeCPP.Octreewarpper import GenOctree
 

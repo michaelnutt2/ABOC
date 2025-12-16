@@ -164,7 +164,7 @@ class DataFolder(data.Dataset):
         return img
 
     def __len__(self):
-        return int(1000 * self.fileLen) # Placeholder
+        return int(10 * self.fileLen) # Reduced for testing (was 1000)
 
 
 

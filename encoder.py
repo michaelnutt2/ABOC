@@ -1,9 +1,3 @@
-"""
-Author: fuchy@stu.pku.edu.cn
-Description: this file encodes point cloud
-FilePath: /compression/encoder.py
-All rights reserved.
-"""
 import datetime
 import os
 

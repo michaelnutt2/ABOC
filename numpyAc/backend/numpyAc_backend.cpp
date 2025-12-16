@@ -79,14 +79,14 @@ public:
     size_t in_ptr=0;
 
     void get(uint32_t& value) {
-        
+
         if (cached_bits == 0) {
-            if (in_ptr == in_.size()){       
+            if (in_ptr == in_.size()){
                 value <<= 1;
                 return;
             }
             /// Read 1 byte
-            
+
             cache = (uint8_t) in_[in_ptr];
             in_ptr++;
             cached_bits = 8;
@@ -106,6 +106,26 @@ public:
 
 //------------------------------------------------------------------------------
 
+
+
+cdf_t binsearch_ptr(const int16_t* cdf_row, cdf_t target, cdf_t max_sym)
+{
+    cdf_t left = 0;
+    cdf_t right = max_sym + 1;
+
+    while (left + 1 < right) {
+        const auto m = static_cast<const cdf_t>((left + right) / 2);
+        const auto v = (cdf_t)cdf_row[m];
+        if (v < target) {
+            left = m;
+        } else if (v > target) {
+            right = m;
+        } else {
+            return m;
+        }
+    }
+    return left;
+}
 
 cdf_t binsearch(py::list &cdf, cdf_t target, cdf_t max_sym,
                 const int offset)  /* i * Lp */
@@ -149,14 +169,14 @@ public:
     InCacheString in_cache;
     decode(const std::string &in, const int&sysNum_,const int&sysNumDim_):in_cache(in),N_sym(sysNum_),Lp(sysNumDim_),max_symbol(sysNumDim_-2){
         in_cache.initialize(value);
-    
+
     };
-    
+
     int16_t decodeAsym(py::list cdf) {
 
 
         for (; dataID < N_sym; ++dataID) {
- 
+
             const uint64_t span = static_cast<uint64_t>(high) - static_cast<uint64_t>(low) + 1;
             // always < 0x10000 ???
             const uint16_t count = ((static_cast<uint64_t>(value) - static_cast<uint64_t>(low) + 1) * c_count - 1) / span;
@@ -182,36 +202,80 @@ public:
                     low <<= 1;
                     high <<= 1;
                     high |= 1;
-                    
+
                     in_cache.get(value);
-                
+
                 } else if (low >= 0x40000000U && high < 0xC0000000U) {
-                    /**
-                     * 0100 0000 ... <= value <  1100 0000 ...
-                     * <=>
-                     * 0100 0000 ... <= value <= 1011 1111 ...
-                     * <=>
-                     * value starts with 01 or 10.
-                     * 01 - 01 == 00  |  10 - 01 == 01
-                     * i.e., with shifts
-                     * 01A -> 0A  or  10A -> 1A, i.e., discard 2SB as it's all the same while we are in
-                     *    near convergence
-                     */
                     low <<= 1;
                     low &= 0x7FFFFFFFU;  // make MSB 0
                     high <<= 1;
                     high |= 0x80000001U;  // add 1 at the end, retain MSB = 1
                     value -= 0x40000000U;
-                
+
                     in_cache.get(value);
-      
+
                 } else {
-                    break; 
+                    break;
                 }
             }
-   
+
             return (int16_t)sym_i;
         }
+        return -1; // Should not reach
+    }
+
+    std::vector<int16_t> decodeCDFBatch(const torch::Tensor& cdf_batch) {
+        // cdf_batch: [Batch, Lp] (int16 type usually, but backend uses int16)
+        // Ensure CPU and correct type
+        auto cdf_acc = cdf_batch.accessor<int16_t, 2>();
+        int batch_size = cdf_batch.size(0);
+
+        std::vector<int16_t> decoded_syms;
+        decoded_syms.reserve(batch_size);
+
+        for (int i = 0; i < batch_size; ++i) {
+
+            const uint64_t span = static_cast<uint64_t>(high) - static_cast<uint64_t>(low) + 1;
+            const uint16_t count = ((static_cast<uint64_t>(value) - static_cast<uint64_t>(low) + 1) * c_count - 1) / span;
+
+            // Use the i-th row of the batch CDF
+            sym_i = binsearch_ptr((const int16_t*)cdf_acc[i].data(), count, (cdf_t)max_symbol);
+
+            decoded_syms.push_back((int16_t)sym_i);
+
+            // Should match logic in decodeAsym
+            // If dataID is last, we break? decodeAsym has logic: if (dataID == N_sym-1) { break; }
+            // But if we break, we don't update low/high?
+            // In decodeAsym, if break, loop terminates, returns sym_i.
+            // So we should do same.
+
+
+            const uint32_t c_low = (uint16_t)cdf_acc[i][sym_i];
+            const uint32_t c_high = sym_i == max_symbol ? 0x10000U : (uint16_t)cdf_acc[i][sym_i + 1];
+
+            high = (low - 1) + ((span * static_cast<uint64_t>(c_high)) >> precision);
+            low =  (low)     + ((span * static_cast<uint64_t>(c_low))  >> precision);
+
+            while (true) {
+                if (low >= 0x80000000U || high < 0x80000000U) {
+                    low <<= 1;
+                    high <<= 1;
+                    high |= 1;
+                    in_cache.get(value);
+                } else if (low >= 0x40000000U && high < 0xC0000000U) {
+                    low <<= 1;
+                    low &= 0x7FFFFFFFU;
+                    high <<= 1;
+                    high |= 0x80000001U;
+                    value -= 0x40000000U;
+                    in_cache.get(value);
+                } else {
+                    break;
+                }
+            }
+
+        }
+        return decoded_syms;
     }
 
 };
@@ -338,10 +402,11 @@ py::bytes encode_cdf(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("encode_cdf", &encode_cdf, "Encode from CDF");
- 
+
     py::class_<decode>(m, "decode")
         .def(py::init([] (const std::string in, const int&sysNum_,const int&sysNumDim_) {
             return new decode(in,sysNum_,sysNumDim_);
         }))
-        .def("decodeAsym", &decode::decodeAsym);
+        .def("decodeAsym", &decode::decodeAsym)
+        .def("decodeCDFBatch", &decode::decodeCDFBatch);
 }

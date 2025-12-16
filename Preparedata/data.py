@@ -1,23 +1,19 @@
-'''
-Author: fuchy@stu.pku.edu.cn
-Date: 2021-09-17 23:30:48
-LastEditTime: 2021-12-02 22:18:56
-LastEditors: FCY
-Description: dataPrepare helper
-FilePath: /compression/Preparedata/data.py
-All rights reserved.
-'''
-from Octree import GenOctree, GenKparentSeq
+
+from Octree import GenOctree, GenKparentSeq, GenParallelContext
 import pt as pointCloud
 import numpy as np
 import os
 import hdf5storage
+from config import CONTEXT_RANGE
 
 
 def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min', qlevel=None, rotation=False,
                 normalize=False):
     if not os.path.exists(saveMatDir):
         os.makedirs(saveMatDir)
+    import time
+
+    t_start = time.time()
     ptName = ptNamePrefix + os.path.splitext(os.path.basename(fileName))[0]
     p = pointCloud.ptread(fileName)
 
@@ -42,13 +38,23 @@ def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min'
     pt = np.round(points / qs)
     pt, idx = np.unique(pt, axis=0, return_index=True)
     pt = pt.astype(int)
-    # pointCloud.write_ply_data('pori.ply',np.hstack((pt,c)),attributeName=['reflectance'],attriType=['uint16'])
+
+    t_load = time.time()
+    print(f"  [Profile] Load & Preprocess: {t_load - t_start:.4f}s")
+
     code, Octree, QLevel = GenOctree(pt)
+
+    t_oct = time.time()
+    print(f"  [Profile] GenOctree:         {t_oct - t_load:.4f}s")
+
     # DataSturct = GenKparentSeq(Octree, 4) # OLD
 
     # Generate Parallel Context (Parent + Neighbors)
-    # Assuming context_range=8 as requested
-    Context, AllOcts = GenParallelContext(Octree, context_range=8)
+    # Using context_range from config
+    Context, AllOcts = GenParallelContext(Octree, context_range=CONTEXT_RANGE)
+
+    t_ctx = time.time()
+    print(f"  [Profile] GenParallelContext:{t_ctx - t_oct:.4f}s")
 
     ptcloud = {'Location': refPt}
     # Info = {'qs': qs, 'offset': offset, 'Lmax': QLevel, 'name': ptName,
@@ -102,8 +108,8 @@ def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min'
             # context array includes parent at center.
             # Schema has: parent_occupancy and neighbor_occupancies.
             # Let's split them.
-            # ctx length is 2*8 + 1 = 17. Center is index 8.
-            center_idx = 8
+            # ctx length is 2*CONTEXT_RANGE + 1. Center is index CONTEXT_RANGE.
+            center_idx = CONTEXT_RANGE
             parent_occ = ctx[center_idx]
             neighbors = np.delete(ctx, center_idx) # Remove parent from neighbors list
 
@@ -161,6 +167,9 @@ def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min'
             f.write(buf)
 
         print(f"Saved FlatBuffer to {out_path}")
+
+        t_save = time.time()
+        print(f"  [Profile] FlatBuffer Save:   {t_save - t_ctx:.4f}s")
 
     except ImportError as e:
         print(f"Skipping FlatBuffer generation: {e}")

@@ -1,5 +1,5 @@
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D
+# import matplotlib.pyplot as plt
 import numpy as np
 import h5py
 import random
@@ -82,7 +82,7 @@ def loadply2(path, color_format='rgb'):
     plydata = PlyData.read(path)
 
     data = plydata.elements[0].data
-    # pcd.points 
+    # pcd.points
     # pcd = PyntCloud.from_file(path)
     points = np.asarray([data['x'], data['y'], data['z']]).T
     if color_format != 'geometry':
@@ -202,9 +202,9 @@ def loadh5(filedir, color_format='rgb'):
 
 def loadply(filedir, color_format='rgb'):
     """Load coords & feats from ply file.
-  
+
   Arguments: file direction.
-  
+
   Returns: coords & feats.
   """
 

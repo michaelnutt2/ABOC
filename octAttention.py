@@ -20,10 +20,11 @@ from attentionModel import TransformerLayer, TransformerModule
 
 ##########################
 
-ntokens = 255  # the size of vocabulary
-ninp = 128 + 4 + 6  # embedding dimension (138)
+ntokens = 256  # the size of vocabulary (0-255)
+ninp = 130 + 4 + 6  # embedding dimension (140, divisible by 4)
 nhid = 300  # the dimension of the feedforward network model in nn.TransformerEncoder
 nlayers = 3  # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
+epochs = 1  # 1 Epoch for testing
 nhead = 4  # the number of heads in the multiheadattention models
 dropout = 0  # the dropout value
 batchSize = 32
@@ -54,7 +55,7 @@ class TransformerModel(nn.Module):
         encoder_layers = TransformerLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerModule(encoder_layers, nlayers)
 
-        self.encoder = nn.Embedding(ntoken, 128)
+        self.encoder = nn.Embedding(ntoken, 130)  # Adjusted to 130
         self.encoder1 = nn.Embedding(MAX_OCTREE_LEVEL + 1, 6)
         self.encoder2 = nn.Embedding(9, 4)
 
@@ -180,84 +181,95 @@ def get_batch(source, i):
     return data, targets, []
 
 
+
+model = TransformerModel(ntokens, ninp, nhead, nhid, nlayers, dropout).to(device)
+
+if __name__ == "__main__":
+    import dataset
+    import torch.utils.data as data
+    import time
+    import os
+
+    # Configuration for Test
+    # epochs = 8 (Global is 1)
+    best_model = None
+    # batch_size = 32 (Global)
+    TreePoint = bptt * 16
+
+    # Dataset
+    train_set = dataset.DataFolder(root=trainDataRoot, TreePoint=TreePoint, transform=None, dataLenPerFile=None)
+    train_loader = data.DataLoader(dataset=train_set, batch_size=batchSize, shuffle=False, num_workers=0, drop_last=True)
+
+    # Logger
+    if not os.path.exists(checkpointPath):
+        os.makedirs(checkpointPath)
+    printl = CPrintl(expName + '/loss.log')
+    writer = SummaryWriter('./log/' + expName)
+    printl(datetime.datetime.now().strftime('\r\n%Y-%m-%d:%H:%M:%S'))
+    printl(expComment + ' Pid: ' + str(os.getpid()))
+
+    log_interval = 1 # concise log
+
+    # Optimization
+    criterion = nn.CrossEntropyLoss()
+    lr = 1e-3
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+    best_val_loss = float("inf")
+    idloss = 0
+
+    # Reload
+    saveDic = None
+    if os.path.exists(checkpointPath):
+         # Try to load latest?
+         pass
+
     def train(epoch):
         print("--Starting Training--")
         global idloss, best_val_loss
         model.train()  # Turn on the train mode
         total_loss = 0.
         start_time = time.time()
-        total_loss_list = torch.zeros((1, 7))
 
         for Batch, d in enumerate(train_loader):
-            print("--Training Batch " + str(Batch) + "--")
+            # print("--Training Batch " + str(Batch) + "--")
 
-            # d[0] shape: [batchSize * (?) , ?] from DataLoader
-            # DataLoader loads TreePoint * batch_size items.
-            # But we reshaped d[0] in original code.
-            # New DataLoader returns [Batch, TreePoint, 17, 4] if batch_size > 1?
-            # DataLoader with batch_size=N stacks them.
-            # d[0] is [batch_size, TreePoint, 17, 4].
+            # d is list of [chunk]. chunk is [TreePoint, 17, 4]?
+            # dataset returns [1, TreePoint, 17, 4] if batch_size=1?
+            # DataLoader collates.
+            # d[0] is [Batch, TreePoint, 17, 4]
 
-            # Reshape to [TreePoint, batch_size, 17, 4] to mimic "sequence" logic or just flatten
-            train_data = d[0].permute(1, 0, 2, 3).to(device) # [TreePoint, batch_size, 17, 4]
+            train_data = d[0].permute(1, 0, 2, 3).to(device) # [TreePoint, Batch, 17, 4]
 
-            # No Mask needed (or mask neighbors?)
-            # All neighbors are visible.
             src_mask = None
 
             for index, i in enumerate(range(0, train_data.size(0), bptt)):
-                # print("--In a loop at index " + str(index) + "--")
                 data, targets, dataFeat = get_batch(train_data, i)
 
                 optimizer.zero_grad()
+                output = model(data, src_mask, dataFeat)
 
-                # Model forward
-                # data: [17, N, 3]
-                output = model(data, src_mask, dataFeat)  # output: [17, N, 255]?
-
-                # We only want prediction for the Center node?
-                # Or do we aggregate the Transformer output?
-                # Usually standard Transfomer predicts "Next Token" or "Masked Token".
-                # But here we are classifying the Center Node based on Context.
-                # If we feed [17, N, 3]. Output is [17, N, 255].
-                # Which token output corresponds to the classification?
-                # Approaches:
-                # 1. Take output at Center Index (8)?
-                # 2. Take output at last index?
-                # 3. Average pool?
-                # The "Decoder1" projects to 255 (classes).
-                # Let's assume we use the output at the center position (8) to predict the center node?
-                # Or maybe position 0 (CLS token equivalent)?
-                # Given we trained it as "Sequence", probably the center corresponds to the parent?
-                # The relationship "Context -> Child" is learned.
-                # If we use the output corresponding to the Parent token (index 8) to predict the Child?
-                # Let's try Center Index (8).
-
-                output = output[8, :, :] # [N, 255]
+                # Use Center Token Prediction
+                output = output[8, :, :] # [Batch, 255]
 
                 loss = criterion(output, targets) / math.log(2)
-
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                 optimizer.step()
                 total_loss += loss.item()
 
-                batch = index # Reuse variable name logic
+                batch = index
                 if batch % log_interval == 0 and batch > 0:
                     cur_loss = total_loss / log_interval
                     elapsed = time.time() - start_time
-
-                    total_loss_list = " - "
                     printl('| epoch {:3d} | Batch {:3d} | {:4d}/{:4d} batches | '
                            'lr {:02.2f} | ms/batch {:5.2f} | '
-                           'loss {:5.2f} | losslist  {} | ppl {:8.2f}'.format(
+                           'loss {:5.2f} | ppl {:8.2f}'.format(
                         epoch, Batch, batch, len(train_data) // bptt, scheduler.get_last_lr()[0],
                                              elapsed * 1000 / log_interval,
-                        cur_loss, total_loss_list, math.exp(cur_loss)))
+                        cur_loss, math.exp(cur_loss)))
                     total_loss = 0
-
                     start_time = time.time()
-
                     writer.add_scalar('train_loss', cur_loss, idloss)
                     idloss += 1
 
@@ -265,8 +277,7 @@ def get_batch(source, i):
                 save(epoch * 100000 + Batch, saveDict={'encoder': model.state_dict(), 'idloss': idloss, 'epoch': epoch,
                                                        'best_val_loss': best_val_loss}, modelDir=checkpointPath)
 
-
-    # train
+    # Train Loop
     for epoch in range(1, epochs + 1):
         epoch_start_time = time.time()
         train(epoch)

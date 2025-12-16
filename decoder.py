@@ -1,12 +1,3 @@
-"""
-Author: fuchy@stu.pku.edu.cn
-Date: 2021-09-17 23:30:48
-LastEditTime: 2021-12-02 22:18:56
-LastEditors: FCY
-Description: decoder
-FilePath: /compression/decoder.py
-All rights reserved.
-"""
 #%%
 import numpy as np
 import torch

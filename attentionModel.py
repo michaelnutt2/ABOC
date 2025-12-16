@@ -1,12 +1,4 @@
-"""
-Author: fuchy@stu.pku.edu.cn
-Date: 2021-09-17 23:30:48
-LastEditTime: 2021-12-02 22:18:56
-LastEditors: FCY SR
-Description: attentionModel
-FilePath: /compression/attentionModel.py
-All rights reserved.
-"""
+
 import torch
 import torch.nn as nn
 import math
@@ -166,8 +158,7 @@ class TransformerLayer(nn.Module):
             src_mask: attention mask.
             src_key_padding_mask: mask for padding keys.
         """
-        src2 = self.self_attn(src, src, src, attn_mask=src_mask,
-                              key_padding_mask=src_key_padding_mask)[0]
+        src2 = self.self_attn(src, src_mask)
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
