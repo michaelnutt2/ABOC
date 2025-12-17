@@ -25,12 +25,14 @@ EMBED_DIM = 140 # Embedding Dimension (130 + 6 + 4)
 NUM_HEADS = 4   # Number of Attention Heads
 FF_DIM = 300    # Feed Forward Network Dimension
 NUM_LAYERS = 3  # Number of Transformer Layers
-DROPOUT = 0.0   # Dropout Rate
+DROPOUT = 0.2   # Dropout Rate
 
 # --- Training / Experiment ---
 EXP_NAME = './Exp/Kitti_TF'
 BATCH_SIZE = 32
 EPOCHS = 50
+INITIAL_LR = 1e-4
+
 
 # --- Cloud Configuration ---
 BUCKET_NAME = "mtn_fb_file_bucket"
