@@ -35,5 +35,5 @@ EPOCHS = 50
 # --- Cloud Configuration ---
 BUCKET_NAME = "mtn_fb_file_bucket"
 # GCS_DATA_PREFIX = "data"
-GCS_CHECKPOINT_PREFIX = "checkpoints"
 GCS_DATA_PREFIX = "data_subset_64"
+GCS_CHECKPOINT_PREFIX = "checkpoints"
