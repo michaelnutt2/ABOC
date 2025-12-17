@@ -8,7 +8,7 @@ and model architecture.
 # --- Data Configuration ---
 # Parallel Context Range: Number of neighbors on EACH side of the parent.
 # Total Context Length = (2 * CONTEXT_RANGE) + 1 (Parent)
-CONTEXT_RANGE = 512
+CONTEXT_RANGE = 64
 
 # Derived Context Length (e.g., 512*2 + 1 = 1025)
 CONTEXT_LEN = (2 * CONTEXT_RANGE) + 1
@@ -34,5 +34,6 @@ EPOCHS = 50
 
 # --- Cloud Configuration ---
 BUCKET_NAME = "mtn_fb_file_bucket"
-GCS_DATA_PREFIX = "data"
+# GCS_DATA_PREFIX = "data"
 GCS_CHECKPOINT_PREFIX = "checkpoints"
+GCS_DATA_PREFIX = "data_subset_64"

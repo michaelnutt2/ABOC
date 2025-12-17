@@ -40,12 +40,12 @@ def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min'
     pt = pt.astype(int)
 
     t_load = time.time()
-    print(f"  [Profile] Load & Preprocess: {t_load - t_start:.4f}s")
+    # print(f"  [Profile] Load & Preprocess: {t_load - t_start:.4f}s")
 
     code, Octree, QLevel = GenOctree(pt)
 
     t_oct = time.time()
-    print(f"  [Profile] GenOctree:         {t_oct - t_load:.4f}s")
+    # print(f"  [Profile] GenOctree:         {t_oct - t_load:.4f}s")
 
     # DataSturct = GenKparentSeq(Octree, 4) # OLD
 
@@ -54,7 +54,7 @@ def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min'
     Context, AllOcts = GenParallelContext(Octree, context_range=CONTEXT_RANGE)
 
     t_ctx = time.time()
-    print(f"  [Profile] GenParallelContext:{t_ctx - t_oct:.4f}s")
+    # print(f"  [Profile] GenParallelContext:{t_ctx - t_oct:.4f}s")
 
     ptcloud = {'Location': refPt}
     # Info = {'qs': qs, 'offset': offset, 'Lmax': QLevel, 'name': ptName,
@@ -166,10 +166,10 @@ def dataPrepare(fileName, saveMatDir='Data', qs=1, ptNamePrefix='', offset='min'
         with open(out_path, 'wb') as f:
             f.write(buf)
 
-        print(f"Saved FlatBuffer to {out_path}")
+        # print(f"Saved FlatBuffer to {out_path}")
 
         t_save = time.time()
-        print(f"  [Profile] FlatBuffer Save:   {t_save - t_ctx:.4f}s")
+        # print(f"  [Profile] FlatBuffer Save:   {t_save - t_ctx:.4f}s")
 
     except ImportError as e:
         print(f"Skipping FlatBuffer generation: {e}")
