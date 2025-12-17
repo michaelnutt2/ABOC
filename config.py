@@ -36,6 +36,6 @@ INITIAL_LR = 1e-4
 
 # --- Cloud Configuration ---
 BUCKET_NAME = "mtn_fb_file_bucket"
-# GCS_DATA_PREFIX = "data"
-GCS_DATA_PREFIX = "subset_64"
+GCS_DATA_PREFIX = "data"
+# GCS_DATA_PREFIX = "subset_64"
 GCS_CHECKPOINT_PREFIX = "checkpoints"
