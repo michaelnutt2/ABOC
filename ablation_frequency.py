@@ -14,12 +14,18 @@ import numpyAc
 import OctreeData.Dataset as Dataset
 import OctreeData.OctreeNode as OctreeNode
 
+import config
+import gcsfs
+
 # Configuration
-SEQUENCES_DIR = "/home/michael-nutt/Datasets/SemanticKITTI/dataset/sequences"
+# Use GCS Bucket if configured, otherwise fallback to local
+USE_GCS = True if config.BUCKET_NAME else False
+GCS_PATTERN = f"gs://{config.BUCKET_NAME}/{config.GCS_DATA_PREFIX}/*.fb"
+
 OUTPUT_DIR = "./Exp/Ablation_Frequency"
 LOG_FILE = f"{OUTPUT_DIR}/ablation_log.txt"
 CSV_FILE = f"{OUTPUT_DIR}/ablation_results.csv"
-SAMPLES_PER_SEQUENCE = 100 # Same sampling as benchmark for fair comparison
+SAMPLES_PER_SEQUENCE = 100
 
 def print_log(*args):
     msg = " ".join(map(str, args))
@@ -160,40 +166,41 @@ def main():
 
     print_log("Starting Frequency Ablation Study (Enc+Dec)...")
 
-    sequences = sorted(glob.glob(f"{SEQUENCES_DIR}/*"))
+    if USE_GCS:
+        print_log(f"Scanning GCS: {GCS_PATTERN}")
+        fs = gcsfs.GCSFileSystem()
+        all_files = fs.glob(GCS_PATTERN)
 
-    total_files = 0
-    total_size = 0
-    total_points = 0
-    total_enc_time = 0
-    total_dec_time = 0
-
-    for seq_path in sequences:
-        seq_id = os.path.basename(seq_path)
-        velodyne_dir = os.path.join(seq_path, "velodyne")
-
-        if not os.path.exists(velodyne_dir):
-            continue
-
-        all_bins = glob.glob(f"{velodyne_dir}/*.bin")
-        if not all_bins:
-            continue
-
-        if len(all_bins) > SAMPLES_PER_SEQUENCE:
-            sampled_files = random.sample(all_bins, SAMPLES_PER_SEQUENCE)
+        if len(all_files) > SAMPLES_PER_SEQUENCE:
+            sampled_files = random.sample(all_files, SAMPLES_PER_SEQUENCE)
         else:
-            sampled_files = all_bins
+            sampled_files = all_files
 
-        print_log(f"Processing Sequence {seq_id}: {len(sampled_files)} files")
+        print_log(f"Processing {len(sampled_files)} files from GCS...")
 
-        for ori_file in sampled_files:
-            file_name = os.path.basename(ori_file)
+        for f_path in sampled_files:
+            file_name = os.path.basename(f_path)
             try:
-                bpp, comp_size, enc_time, dec_time, num_points = process_file(ori_file)
+                # Direct read from GCS
+                with fs.open(f_path, 'rb') as f:
+                    buf = f.read()
+
+                # We need to adapt process_file to take bytes or handle GCS path
+                # Ideally, process_file should take 'data' or we modify it to open GCS path
+                # Let's modify process_file to return stats given a path and optional buffer
+                # But process_file is defined above. I should refactor it or wrap it.
+                # Actually, I can just write to a temp file for now to minimize refactoring risk
+
+                temp_fb = f"{OUTPUT_DIR}/temp_data/{file_name}"
+                with open(temp_fb, 'wb') as tf:
+                    tf.write(buf)
+
+                bpp, comp_size, enc_time, dec_time, num_points = process_file(temp_fb)
+                os.remove(temp_fb) # Cleanup
 
                 with open(CSV_FILE, 'a', newline='') as f:
                     writer = csv.writer(f)
-                    writer.writerow([seq_id, file_name, num_points, f"{enc_time:.4f}", f"{dec_time:.4f}", comp_size, f"{bpp:.4f}"])
+                    writer.writerow(["GCS", file_name, num_points, f"{enc_time:.4f}", f"{dec_time:.4f}", comp_size, f"{bpp:.4f}"])
 
                 total_files += 1
                 total_size += comp_size
@@ -203,8 +210,44 @@ def main():
 
             except Exception as e:
                 print_log(f"Error {file_name}: {e}")
-                import traceback
-                traceback.print_exc()
+    else:
+        # Legacy Local Mode
+        sequences = sorted(glob.glob(f"{SEQUENCES_DIR}/*"))
+        for seq_path in sequences:
+            seq_id = os.path.basename(seq_path)
+            velodyne_dir = os.path.join(seq_path, "velodyne")
+
+            if not os.path.exists(velodyne_dir):
+                continue
+
+            all_bins = glob.glob(f"{velodyne_dir}/*.bin")
+            if not all_bins:
+                continue
+
+            if len(all_bins) > SAMPLES_PER_SEQUENCE:
+                sampled_files = random.sample(all_bins, SAMPLES_PER_SEQUENCE)
+            else:
+                sampled_files = all_bins
+
+            print_log(f"Processing Sequence {seq_id}: {len(sampled_files)} files")
+
+            for ori_file in sampled_files:
+                file_name = os.path.basename(ori_file)
+                try:
+                    bpp, comp_size, enc_time, dec_time, num_points = process_file(ori_file)
+
+                    with open(CSV_FILE, 'a', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([seq_id, file_name, num_points, f"{enc_time:.4f}", f"{dec_time:.4f}", comp_size, f"{bpp:.4f}"])
+
+                    total_files += 1
+                    total_size += comp_size
+                    total_points += num_points
+                    total_enc_time += enc_time
+                    total_dec_time += dec_time
+
+                except Exception as e:
+                    print_log(f"Error {file_name}: {e}")
 
     if total_files > 0:
         avg_bpp = (total_size * 8) / total_points
