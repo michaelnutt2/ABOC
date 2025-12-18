@@ -2,7 +2,7 @@
 
 **ABOC** is a modernized, TensorFlow-based implementation of **OctAttention**, designed for high-performance point cloud compression with large-scale context windows.
 
-This project builds upon the original [OctAttention](http://arxiv.org/abs/2202.06028) (AAAI 2022) but introduces significant architectural improvements for scalability, cloud integration, and ablation testing.
+This project builds upon the original [OctAttention](http://arxiv.org/abs/2202.06028) (AAAI 2022) but introduces a design change in the data used for training to allow for parrallelized encoding and decoding of the data.
 
 ## Key Differences from OctAttention
 
